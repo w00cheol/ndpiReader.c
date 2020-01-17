@@ -54,9 +54,14 @@
 
 #include "reader_util.h"
 #include "intrusion_detection.h"
-#include "pinlab_s7.h"
+
+int dnp_count = 0;
+int modbus_count = 0;
+int all = 0;
 
 FILE* fp;
+FILE* fp1;
+FILE* fp2;
 int counter = 1;
 /** statistics structure **/
 typedef struct _s7_count_struct_ {
@@ -66,13 +71,12 @@ typedef struct _s7_count_struct_ {
 	int counter_reqSZL_res;
 	int counter_readClock_res;
 	int counter_msgService_res;
-	int counter_setupComm;
 	u_int8_t src_ip_request[4];
 	u_int8_t src_ip_response[4];
 } s7_count_struct;
 
 static s7_count_struct s7_counter;
-//
+
 /** Client parameters **/
 
 static char* _pcap_file[MAX_NUM_READER_THREADS]; /**< Ingress pcap file/interfaces */
@@ -1104,9 +1108,9 @@ static void printFlow(u_int16_t id, struct ndpi_flow_info* flow, u_int16_t threa
 		/* TCP window */
 		fprintf(csv_fp, "%u,%u,", flow->c_to_s_init_win, flow->s_to_c_init_win);
 
-		// fprintf(csv_fp, "%s,%s,",
-		  //   (flow->ssh_tls.client_info[0] != '\0')  ? flow->ssh_tls.client_info : "",
-		  //   (flow->ssh_tls.server_info[0] != '\0')  ? flow->ssh_tls.server_info : "");
+		fprintf(csv_fp, "%s,%s,",
+			(flow->ssh_tls.client_info[0] != '\0') ? flow->ssh_tls.client_info : "",
+			(flow->ssh_tls.server_info[0] != '\0') ? flow->ssh_tls.server_info : "");
 
 		fprintf(csv_fp, "%s,%s,%s,",
 			(flow->ssh_tls.ssl_version != 0) ? ndpi_ssl_version2str(flow->ssh_tls.ssl_version, &known_tls) : "0",
@@ -1227,7 +1231,7 @@ static void printFlow(u_int16_t id, struct ndpi_flow_info* flow, u_int16_t threa
 			flow->http.content_type, flow->http.user_agent);
 
 	if (flow->ssh_tls.ssl_version != 0) fprintf(out, "[%s]", ndpi_ssl_version2str(flow->ssh_tls.ssl_version, &known_tls));
-	//if(flow->ssh_tls.client_info[0] != '\0') fprintf(out, "[Client: %s]", flow->ssh_tls.client_info);
+	if (flow->ssh_tls.client_info[0] != '\0') fprintf(out, "[Client: %s]", flow->ssh_tls.client_info);
 	if (flow->ssh_tls.client_hassh[0] != '\0') fprintf(out, "[HASSH-C: %s]", flow->ssh_tls.client_hassh);
 
 	if (flow->ssh_tls.ja3_client[0] != '\0') fprintf(out, "[JA3C: %s%s]", flow->ssh_tls.ja3_client,
@@ -2084,7 +2088,7 @@ static void printFlowsStats() {
 						newHost->host_server_info_hasht = NULL;
 						newHost->ip_string = all_flows[i].flow->src_name;
 						newHost->ip = all_flows[i].flow->src_ip;
-						//newHost->dns_name = all_flows[i].flow->ssh_tls.client_info;
+						newHost->dns_name = all_flows[i].flow->ssh_tls.client_info;
 
 						ndpi_ja3_info* newJA3 = malloc(sizeof(ndpi_ja3_info));
 						newJA3->ja3 = all_flows[i].flow->ssh_tls.ja3_client;
@@ -2118,7 +2122,7 @@ static void printFlowsStats() {
 
 						newHost->ip = all_flows[i].flow->src_ip;
 						newHost->ip_string = all_flows[i].flow->src_name;
-						//newHost->dns_name = all_flows[i].flow->ssh_tls.client_info;;
+						newHost->dns_name = all_flows[i].flow->ssh_tls.client_info;;
 
 						ndpi_ja3_fingerprints_host* newElement = malloc(sizeof(ndpi_ja3_fingerprints_host));
 						newElement->ja3 = all_flows[i].flow->ssh_tls.ja3_client;
@@ -2136,7 +2140,7 @@ static void printFlowsStats() {
 							ndpi_ip_dns* newInnerElement = malloc(sizeof(ndpi_ip_dns));
 							newInnerElement->ip = all_flows[i].flow->src_ip;
 							newInnerElement->ip_string = all_flows[i].flow->src_name;
-							//newInnerElement->dns_name = all_flows[i].flow->ssh_tls.client_info;
+							newInnerElement->dns_name = all_flows[i].flow->ssh_tls.client_info;
 							HASH_ADD_INT(hostByJA3Found->ipToDNS_ht, ip, newInnerElement);
 						}
 					}
@@ -2561,43 +2565,40 @@ static void printResults(u_int64_t processing_time_usec, u_int64_t setup_time_us
 			printf("\tGuessed flow protos:   %-13u\n", cumulative_stats.guessed_flow_protocols);
 	}
 
-	printf("\nDetected S7 packets: %d\n", s7_counter.counter_reqSZL_req + s7_counter.counter_reqSZL_res + s7_counter.counter_msgService_req + s7_counter.counter_msgService_res + s7_counter.counter_readClock_req + s7_counter.counter_readClock_res + s7_counter.counter_setupComm);
+	printf("\nDetected S7 packets: %d\n", counter - 1);
+	printf("\nDetected DNP 3.0 packets: %d\n", dnp_count);
+	printf("\nDetected Modbus packets: %d\n", modbus_count);
+	/*
+	  if(s7_counter.counter_reqSZL_req > 0)
+	  printf("From: %d.%d.%d.%d / Request Response / Read SZL / Request: \t\t\t %d\n",
+				s7_counter.src_ip_request[0], s7_counter.src_ip_request[1], s7_counter.src_ip_request[2], s7_counter.src_ip_request[3],
+				s7_counter.counter_reqSZL_req);
 
-	if (s7_counter.counter_reqSZL_req > 0)
-		printf("From: %d.%d.%d.%d / Request Response / Read SZL / Request: \t\t\t %d\n",
-			s7_counter.src_ip_request[0], s7_counter.src_ip_request[1], s7_counter.src_ip_request[2], s7_counter.src_ip_request[3],
-			s7_counter.counter_reqSZL_req);
+	  if(s7_counter.counter_readClock_req > 0)
+	  printf("From: %d.%d.%d.%d / Request Response / Read Clock / Request: \t\t\t %d\n",
+				s7_counter.src_ip_request[0], s7_counter.src_ip_request[1], s7_counter.src_ip_request[2], s7_counter.src_ip_request[3],
+				s7_counter.counter_readClock_req);
 
-	if (s7_counter.counter_readClock_req > 0)
-		printf("From: %d.%d.%d.%d / Request Response / Read Clock / Request: \t\t\t %d\n",
-			s7_counter.src_ip_request[0], s7_counter.src_ip_request[1], s7_counter.src_ip_request[2], s7_counter.src_ip_request[3],
-			s7_counter.counter_readClock_req);
+	  if(s7_counter.counter_msgService_req > 0)
+	  printf("From: %d.%d.%d.%d / Request Response / Message Service / Request: \t\t %d\n",
+				s7_counter.src_ip_request[0], s7_counter.src_ip_request[1], s7_counter.src_ip_request[2], s7_counter.src_ip_request[3],
+				s7_counter.counter_msgService_req);
 
-	if (s7_counter.counter_msgService_req > 0)
-		printf("From: %d.%d.%d.%d / Request Response / Message Service / Request: \t\t %d\n",
-			s7_counter.src_ip_request[0], s7_counter.src_ip_request[1], s7_counter.src_ip_request[2], s7_counter.src_ip_request[3],
-			s7_counter.counter_msgService_req);
+	  if(s7_counter.counter_reqSZL_res > 0)
+	  printf("From: %d.%d.%d.%d / Request Response / Read SZL / Response: \t\t\t %d\n",
+				s7_counter.src_ip_response[0], s7_counter.src_ip_response[1], s7_counter.src_ip_response[2], s7_counter.src_ip_response[3],
+				s7_counter.counter_reqSZL_res);
 
-	if (s7_counter.counter_reqSZL_res > 0)
-		printf("From: %d.%d.%d.%d / Request Response / Read SZL / Response: \t\t\t %d\n",
-			s7_counter.src_ip_response[0], s7_counter.src_ip_response[1], s7_counter.src_ip_response[2], s7_counter.src_ip_response[3],
-			s7_counter.counter_reqSZL_res);
+	  if(s7_counter.counter_readClock_res > 0)
+	  printf("From: %d.%d.%d.%d / Request Response / Read Clock / Response: \t\t\t %d\n",
+				s7_counter.src_ip_response[0], s7_counter.src_ip_response[1], s7_counter.src_ip_response[2], s7_counter.src_ip_response[3],
+				s7_counter.counter_readClock_res);
 
-	if (s7_counter.counter_readClock_res > 0)
-		printf("From: %d.%d.%d.%d / Request Response / Read Clock / Response: \t\t\t %d\n",
-			s7_counter.src_ip_response[0], s7_counter.src_ip_response[1], s7_counter.src_ip_response[2], s7_counter.src_ip_response[3],
-			s7_counter.counter_readClock_res);
-
-	if (s7_counter.counter_readClock_res > 0)
-		printf("From: %d.%d.%d.%d / Request Response / Message Service / Response: \t\t %d\n",
-			s7_counter.src_ip_response[0], s7_counter.src_ip_response[1], s7_counter.src_ip_response[2], s7_counter.src_ip_response[3],
-			s7_counter.counter_readClock_res);
-
-	if (s7_counter.counter_setupComm > 0)
-		printf("From: %d.%d.%d.%d / Setup communication: \t\t\t\t\t %d\n",
-			s7_counter.src_ip_response[0], s7_counter.src_ip_response[1], s7_counter.src_ip_response[2], s7_counter.src_ip_response[3],
-			s7_counter.counter_setupComm);
-
+	  if(s7_counter.counter_readClock_res > 0)
+	  printf("From: %d.%d.%d.%d / Request Response / Message Service / Response: \t\t %d\n",
+				s7_counter.src_ip_response[0], s7_counter.src_ip_response[1], s7_counter.src_ip_response[2], s7_counter.src_ip_response[3],
+				s7_counter.counter_readClock_res);
+	*/
 	// if(!quiet_mode) printf("\n\nDetected protocols:\n");
 	// for(i = 0; i <= ndpi_get_num_supported_protocols(ndpi_thread_info[0].workflow->ndpi_struct); i++) {
 	//   ndpi_protocol_breed_t breed = ndpi_get_proto_breed(ndpi_thread_info[0].workflow->ndpi_struct, i);
@@ -2846,18 +2847,17 @@ static void ndpi_process_packet(u_char* args,
 	int cotp_offset = 3;
 	int s7_header_offset = 10;
 	int param_offset = payload_offset + tpkt_offset + cotp_offset + s7_header_offset;
-
-	int s7id = 0;
-	int s7index = 0;
-	int s7data_len = 0;
-	int s7data_offset = param_offset + 12;
-	int ROSCTR_offset = payload_offset + tpkt_offset + cotp_offset + 1;
-
 	char job[] = "Job Request";
 	char ack[] = "Ack";
 	char Ack_data[] = "Ack-Data";
 	char ud[] = "Userdata";
-
+	int dnp_offset = 68;
+	int modbus_header_offset = 25;
+	int modbus_offset = 68;
+	int modbus_src = 0;
+	int modbus_dst = 0;
+	int modbus_size = 0;
+	int i = 0;
 	/* allocate an exact size buffer to check overflows */
 	uint8_t* packet_checked = malloc(header->caplen);
 
@@ -2871,23 +2871,128 @@ static void ndpi_process_packet(u_char* args,
 	// }
 	// printf("\n\n\n");
 
+	//found Modbus
+	//printf("%d: packet_checked[modbus_header_offset+11]: 0x%.2x\n",++all,packet_checked[modbus_header_offset+11]);
+	if (packet_checked[modbus_header_offset + 11] == 0x05
+		&& packet_checked[modbus_header_offset + 12] == 0xde
+		&& packet_checked[modbus_header_offset + 23] == 0x80
+		&& packet_checked[modbus_header_offset + 24] == 0x18) {
+		modbus_src = 1;
+		modbus_dst = 0;
+	}
+	if (packet_checked[modbus_header_offset + 13] == 0x05
+		&& packet_checked[modbus_header_offset + 14] == 0xde
+		&& packet_checked[modbus_header_offset + 23] == 0x80
+		&& packet_checked[modbus_header_offset + 24] == 0x18) {
+		modbus_src = 0;
+		modbus_dst = 1;
+	}
+	if (packet_checked[modbus_header_offset] == 0x06 && (modbus_src + modbus_dst) == 1) {
+		modbus_count++;
+		printf("Found a Modbus Packet/ Count : %d\n", modbus_count);
+		if (modbus_count == 1) {
+			fp2 = fopen("/home/pin/Desktop/Modbus_packet_read.txt", "w");
+		}
+		else if (modbus_count != 1) {
+			fp2 = fopen("/home/pin/Desktop/Modbus_packet_read.txt", "a");
+		}
+		if (fp2 == NULL) {
+			printf("fail-exit");
+			return 1;
+		}
+		fprintf(fp2, "========== Modbus packet %d ==========\n\n", modbus_count);
+		fprintf(fp2, "Transaction Identifier: 0x%.2x%.2x\n", packet_checked[modbus_offset + 0], packet_checked[modbus_offset + 1]);
+		fprintf(fp2, "Protocl Iendtifier: 0x%.2x%.2x\n", packet_checked[modbus_offset + 2], packet_checked[modbus_offset + 3]);
+		fprintf(fp2, "Length: 0x%.2x%.2x\n", packet_checked[modbus_offset + 4], packet_checked[modbus_offset + 5]);
+		fprintf(fp2, "Unit Identifier: 0x%.2x\n", packet_checked[modbus_offset + 6]);
+		if (packet_checked[modbus_offset + 7] == 0x01) {
+			fprintf(fp2, "Function Code: 0x%.2x (Read Coils) \n", packet_checked[modbus_offset + 7]);
+		}
+		else if (packet_checked[modbus_offset + 7] == 0x02) {
+			fprintf(fp2, "Function Code: 0x%.2x (Read Input) \n", packet_checked[modbus_offset + 7]);
+		}
+		else if (packet_checked[modbus_offset + 7] == 0x03) {
+			fprintf(fp2, "Function Code: 0x%.2x (Read Holding Registers) \n", packet_checked[modbus_offset + 7]);
+		}
+		else if (packet_checked[modbus_offset + 7] == 0x04) {
+			fprintf(fp2, "Function Code: 0x%.2x (Read Internal Registers) \n", packet_checked[modbus_offset + 7]);
+		}
+		else if (packet_checked[modbus_offset + 7] == 0x05) {
+			fprintf(fp2, "Function Code: 0x%.2x (Force Single Coil) \n", packet_checked[modbus_offset + 7]);
+		}
+		else if (packet_checked[modbus_offset + 7] == 0x06) {
+			fprintf(fp2, "Function Code: 0x%.2x (Preset Single Register) \n", packet_checked[modbus_offset + 7]);
+		}
+		else if (packet_checked[modbus_offset + 7] == 0x0F) {
+			fprintf(fp2, "Function Code: 0x%.2x (Force Multiple Coils) \n", packet_checked[modbus_offset + 7]);
+		}
+		else if (packet_checked[modbus_offset + 7] == 0x10) {
+			fprintf(fp2, "Function Code: 0x%.2x (Preset Multiple Registers) \n", packet_checked[modbus_offset + 7]);
+		}
+		else if (packet_checked[modbus_offset + 7] == 0x16) {
+			fprintf(fp2, "Function Code: 0x%.2x (Maksked Write Register) \n", packet_checked[modbus_offset + 7]);
+		}
+		if (modbus_dst == 1) {
+			//Query
+			fprintf(fp2, "Refernce Number: 0x%.2x%.2x\n", packet_checked[modbus_offset + 8], packet_checked[modbus_offset + 9]);
+			fprintf(fp2, "Count: 0x%.2x%.2x\n\n", packet_checked[modbus_offset + 10], packet_checked[modbus_offset + 11]);
+		}
+		else if (modbus_src == 1) {
+			//Response
+			fprintf(fp2, "Byte Count: 0x%.2x\n", packet_checked[modbus_offset + 8]);
+			// modbus_size = (int)strtol(packet_checked[modbus_offset+8], NULL, 16);
+			fprintf(fp2, "Data: 0x");
+			//printf("modbus size: 0x%.2x\n", packet_checked[modbus_offset+8]);
+		   // printf("modbus size: %d\n", packet_checked[modbus_offset+8]);
+
+			for (i = 0; i < (int)packet_checked[modbus_offset + 8];i++) {
+				fprintf(fp2, "%.2x", packet_checked[modbus_offset + 9 + i]);
+			}
+			fprintf(fp2, "\n\n");
+		}
+		modbus_src = 0;
+		modbus_dst = 0;
+		modbus_size = 0;
+		fclose(fp2);
+	}
+
+	//found dnp 3.0
+	if (packet_checked[dnp_offset + 0] == 0x05 &&
+		packet_checked[dnp_offset + 1] == 0x64) {
+
+		dnp_count++;
+		printf("Found a DNP 3.0 Packet/ Count : %d\n", dnp_count);
+		if (dnp_count == 1) {
+			fp1 = fopen("/home/pin/Desktop/DNP_packet_read.txt", "w");
+		}
+		else if (dnp_count != 1) {
+			fp1 = fopen("/home/pin/Desktop/DNP_packet_read.txt", "a");
+		}
+		fprintf(fp1, "========== DNP 3.0 packet %d==========\n\n", dnp_count);
+		fprintf(fp1, "Length: 0x%.2x\n", packet_checked[dnp_offset + 2]);
+		fprintf(fp1, "Destination: 0x%.2x%.2x\n", packet_checked[dnp_offset + 4], packet_checked[dnp_offset + 5]);
+		fprintf(fp1, "Source: 0x%.2x%.2x\n", packet_checked[dnp_offset + 6], packet_checked[dnp_offset + 7]);
+		fprintf(fp1, "Data Link Header checksum: 0x%.2x%.2x\n\n\n", packet_checked[dnp_offset + 8], packet_checked[dnp_offset + 9]);
+		fclose(fp1);
+	}
+
 	if (packet_checked[payload_offset + 0] == 0x03 &&
 		packet_checked[payload_offset + 1] == 0x00 &&
 		packet_checked[payload_offset + 4] == 0x02 &&
 		packet_checked[payload_offset + 5] == 0xF0 &&
 		packet_checked[payload_offset + 6] == 0x80 &&
-		packet_checked[payload_offset + 7] == 0x32 &&
-		header->caplen >= param_offset + 8) {
+		packet_checked[payload_offset + 7] == 0x32)
+	{
 		// found s7 protocol
 		if (counter == 1) {
-			fp = fopen("/home/in/Desktop/packet_read.txt", "w");
+			fp = fopen("/home/pin/Desktop/S7_packet_read.txt", "w");
 		}
 		else if (counter != 1) {
-			fp = fopen("/home/in/Desktop/packet_read.txt", "a");
+			fp = fopen("/home/pin/Desktop/S7_packet_read.txt", "a");
 		}
 		if (fp == NULL) {
 			printf("fail-exit");
-			return;
+			return 1;
 		}
 
 		fprintf(fp, "==========packet %d==========\n\n", counter);
@@ -2924,14 +3029,77 @@ static void ndpi_process_packet(u_char* args,
 			fprintf(fp, "<<Parameter>>\n\n");
 			if (packet_checked[payload_offset + 17] == 0xf0) {
 				fprintf(fp, "Function: 0x%.2x (Setup communication)\n", packet_checked[payload_offset + 17]);
+				fprintf(fp, "Reserved: 0x%.2x\n", packet_checked[payload_offset + 18]);
+				fprintf(fp, "Max AmQ (parallel jobs with ack) calling: 0x%.2x%.2x\n", packet_checked[payload_offset + 19], packet_checked[payload_offset + 20]);
+				fprintf(fp, "Max AmQ (parallel jobs with ack) called: 0x%.2x%.2x\n", packet_checked[payload_offset + 21], packet_checked[payload_offset + 22]);
+				fprintf(fp, "PDU length: 0x%.2x%.2x\n\n", packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
+			}
+			else if (packet_checked[payload_offset + 17] == 0x1a) {
+				fprintf(fp, "Function: 0x%.2x (Request Download)\n", packet_checked[payload_offset + 17]);
+				if (packet_checked[payload_offset + 18] == 0x00) {
+					fprintf(fp, "More data following: False (0)\nError: False (0)\n");
+				}
+				else {
+					fprintf(fp, "Function Status: 0x%.2x\n", packet_checked[payload_offset + 18]);
+				}
+				fprintf(fp, "Unknown byte(s) in blockcontrol: 0x%.2x%.2x\n", packet_checked[payload_offset + 19], packet_checked[payload_offset + 20]);
+				fprintf(fp, "Unknown byte(s) in blockcontrol: 0x%.2x%.2x%.2x%.2x\n", packet_checked[payload_offset + 21], packet_checked[payload_offset + 22], packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
+				fprintf(fp, "Filename Length: 0x%.2x\n", packet_checked[payload_offset + 25]);
+
+			}
+			else if (packet_checked[payload_offset + 17] == 0x1b) {
+				fprintf(fp, "Function: 0x%.2x (Download block)\n", packet_checked[payload_offset + 17]);
+				if (packet_checked[payload_offset + 18] == 0x00) {
+					fprintf(fp, "More data following: False (0)\nError: False (0)\n");
+				}
+				else {
+					fprintf(fp, "Function Status: 0x%.2x\n", packet_checked[payload_offset + 18]);
+				}
+				fprintf(fp, "Unknown byte(s) in blockcontrol: 0x%.2x%.2x\n", packet_checked[payload_offset + 19], packet_checked[payload_offset + 20]);
+				fprintf(fp, "Unknown byte(s) in blockcontrol: 0x%.2x%.2x%.2x%.2x\n", packet_checked[payload_offset + 21], packet_checked[payload_offset + 22], packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
+				fprintf(fp, "Filename Length: 0x%.2x\n", packet_checked[payload_offset + 25]);
+
+			}
+			else if (packet_checked[payload_offset + 17] == 0x28) {
+				fprintf(fp, "Function: 0x%.2x (PI-Service)\n", packet_checked[payload_offset + 17]);
+				fprintf(fp, "Unknown bytes: 0x%.2x%.2x%.2x%.2x%.2x%.2x%.2x\n", packet_checked[payload_offset + 18], packet_checked[payload_offset + 19], packet_checked[payload_offset + 20], packet_checked[payload_offset + 21], packet_checked[payload_offset + 22], packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
+				fprintf(fp, "Parameter block length: 0x%.2x%.2x\n", packet_checked[payload_offset + 25], packet_checked[payload_offset + 26]);
+				fprintf(fp, "Number of blocks: 0x%.2x\n", packet_checked[payload_offset + 27]);
+				fprintf(fp, "Unknown byte: 0x%.2x\n", packet_checked[payload_offset + 28]);
+				fprintf(fp, "Block type: 0x%.2x%.2x\n", packet_checked[payload_offset + 29], packet_checked[payload_offset + 30]);
+				fprintf(fp, "Block number: 0x%.2x%.2x%.2x%.2x%.2x\n", packet_checked[payload_offset + 31], packet_checked[payload_offset + 32], packet_checked[payload_offset + 33], packet_checked[payload_offset + 34], packet_checked[payload_offset + 35]);
+				fprintf(fp, "Destination  filesystem: 0x%.2x\n", packet_checked[payload_offset + 36]);
+			}
+			else if (packet_checked[payload_offset + 17] == 0x04) {
+				fprintf(fp, "Function: 0x%.2x (Read Var)\n", packet_checked[payload_offset + 17]);
+				fprintf(fp, "Item count: 0x%.2x\n", packet_checked[payload_offset + 18]);
+				fprintf(fp, "Variable specfication: 0x%.2x\n", packet_checked[payload_offset + 19]);
+				fprintf(fp, "Length of following address specification: 0x%.2x\n", packet_checked[payload_offset + 20]);
+				fprintf(fp, "Syntax Id: 0x%.2x\n", packet_checked[payload_offset + 21]);
+				fprintf(fp, "Transport size: 0x%.2x\n", packet_checked[payload_offset + 22]);
+				fprintf(fp, "Length: 0x%.2x%.2x\n", packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
+				fprintf(fp, "DB number: 0x%.2x%.2x\n", packet_checked[payload_offset + 25], packet_checked[payload_offset + 26]);
+				fprintf(fp, "Area: 0x%.2x\n", packet_checked[payload_offset + 27]);
+			}
+			else if (packet_checked[payload_offset + 17] == 0x05) {
+				fprintf(fp, "Function: 0x%.2x (Write Var)\n", packet_checked[payload_offset + 17]);
+				fprintf(fp, "Item count: 0x%.2x\n", packet_checked[payload_offset + 18]);
+				fprintf(fp, "Variable specfication: 0x%.2x\n", packet_checked[payload_offset + 19]);
+				fprintf(fp, "Length of following address specification: 0x%.2x\n", packet_checked[payload_offset + 20]);
+				fprintf(fp, "Syntax Id: 0x%.2x\n", packet_checked[payload_offset + 21]);
+				fprintf(fp, "Transport size: 0x%.2x\n", packet_checked[payload_offset + 22]);
+				fprintf(fp, "Length: 0x%.2x%.2x\n", packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
+				fprintf(fp, "DB number: 0x%.2x%.2x\n", packet_checked[payload_offset + 25], packet_checked[payload_offset + 26]);
+				fprintf(fp, "Area: 0x%.2x\n", packet_checked[payload_offset + 27]);
 			}
 			else {
 				fprintf(fp, "Function: 0x%.2x\n ", packet_checked[payload_offset + 17]);
+				fprintf(fp, "Reserved: 0x%.2x\n", packet_checked[payload_offset + 18]);
+				fprintf(fp, "Max AmQ (parallel jobs with ack) calling: 0x%.2x%.2x\n", packet_checked[payload_offset + 19], packet_checked[payload_offset + 20]);
+				fprintf(fp, "Max AmQ (parallel jobs with ack) called: 0x%.2x%.2x\n", packet_checked[payload_offset + 21], packet_checked[payload_offset + 22]);
+				fprintf(fp, "PDU length: 0x%.2x%.2x\n\n", packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
 			}
-			fprintf(fp, "Reserved: 0x%.2x\n", packet_checked[payload_offset + 18]);
-			fprintf(fp, "Max AmQ (parallel jobs with ack) calling: 0x%.2x%.2x\n", packet_checked[payload_offset + 19], packet_checked[payload_offset + 20]);
-			fprintf(fp, "Max AmQ (parallel jobs with ack) called: 0x%.2x%.2x\n", packet_checked[payload_offset + 21], packet_checked[payload_offset + 22]);
-			fprintf(fp, "PDU length: 0x%.2x%.2x\n\n", packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
+
 		}
 		//Ack_data
 		else if (packet_checked[payload_offset + 8] == 0x03) {
@@ -2945,19 +3113,28 @@ static void ndpi_process_packet(u_char* args,
 			}
 
 			fprintf(fp, "<<Parameter>>\n\n");
-			if (packet_checked[payload_offset + 18] == 0xf0) {
-				fprintf(fp, "Function: 0x%.2x (Setup communication)\n", packet_checked[payload_offset + 18]);
+			if (packet_checked[payload_offset + 19] == 0xf0) {
+				fprintf(fp, "Function: 0x%.2x (Setup communication)\n", packet_checked[payload_offset + 19]);
+				fprintf(fp, "Reserved: 0x%.2x\n", packet_checked[payload_offset + 20]);
+				fprintf(fp, "Max AmQ (parallel jobs with ack) calling: 0x%.2x%.2x\n", packet_checked[payload_offset + 21], packet_checked[payload_offset + 22]);
+				fprintf(fp, "Max AmQ (parallel jobs with ack) called: 0x%.2x%.2x\n", packet_checked[payload_offset + 23], packet_checked[payload_offset + 24]);
+				fprintf(fp, "PDU length: 0x%.2x%.2x\n\n", packet_checked[payload_offset + 25], packet_checked[payload_offset + 26]);
+			}
+			else if (packet_checked[payload_offset + 19] == 0x04) {
+				fprintf(fp, "Function: 0x%.2x (Read Var)\n", packet_checked[payload_offset + 19]);
+				fprintf(fp, "Item count: 0x%.2x\n", packet_checked[payload_offset + 20]);
+			}
+			else if (packet_checked[payload_offset + 19] == 0x05) {
+				fprintf(fp, "Function: 0x%.2x (Write Var)\n", packet_checked[payload_offset + 19]);
+				fprintf(fp, "Item count: 0x%.2x\n", packet_checked[payload_offset + 20]);
 			}
 			else {
-				fprintf(fp, "Function: 0x%.2x\n ", packet_checked[payload_offset + 18]);
+				fprintf(fp, "Function: 0x%.2x\n ", packet_checked[payload_offset + 19]);
 			}
-			fprintf(fp, "Reserved: 0x%.2x\n", packet_checked[payload_offset + 19]);
-			fprintf(fp, "Max AmQ (parallel jobs with ack) calling: 0x%.2x%.2x\n", packet_checked[payload_offset + 20], packet_checked[payload_offset + 21]);
-			fprintf(fp, "Max AmQ (parallel jobs with ack) called: 0x%.2x%.2x\n", packet_checked[payload_offset + 22], packet_checked[payload_offset + 23]);
-			fprintf(fp, "PDU length: 0x%.2x%.2x\n\n", packet_checked[payload_offset + 24], packet_checked[payload_offset + 25]);
+
 		}
 		//UserData
-		else {//
+		else {
 			fprintf(fp, "<<parameter>>\n\n");
 			fprintf(fp, "Parameter head: 0x%.2x%.2x%.2x\n", packet_checked[payload_offset + 17], packet_checked[payload_offset + 18], packet_checked[payload_offset + 19]);
 			fprintf(fp, "parameter Length: 0x%.2x\n", packet_checked[payload_offset + 20]);
@@ -2973,16 +3150,31 @@ static void ndpi_process_packet(u_char* args,
 			if (packet_checked[payload_offset + 22] == 0x44) {
 				fprintf(fp, "Type: Request (4)\nFuncstion group: CPU functions (4)\n");
 			}
+			else if (packet_checked[payload_offset + 22] == 0x43) {
+				fprintf(fp, "Type: Resquest (4)\nFuncstion group: Block function (3)\n");
+			}
+			else if (packet_checked[payload_offset + 22] == 0x47) {
+				fprintf(fp, "Type: Request (4)\nFuncstion group: Time function (7)\n");
+			}
 			else if (packet_checked[payload_offset + 22] == 0x84) {
 				fprintf(fp, "Type: Response (8)\nFuncstion group: CPU functions (4)\n");
 			}
+			else if (packet_checked[payload_offset + 22] == 0x83) {
+				fprintf(fp, "Type: Response (8)\nFuncstion group: Block function (3)\n");
+			}
+			else if (packet_checked[payload_offset + 22] == 0x87) {
+				fprintf(fp, "Type: Response (8)\nFuncstion group: Time function (7)\n");
+			}
+			else {
+				fprintf(fp, "Type,Funcstion group: 0x%.2x \n", packet_checked[payload_offset + 22]);
+			}
 			if (packet_checked[payload_offset + 23] == 0x01) {
-				fprintf(fp, "Subfunction: 0x%.2x (Read SZL)\n", packet_checked[payload_offset + 23]);
+				fprintf(fp, "Subfunction: 0x%.2x \n", packet_checked[payload_offset + 23]);
 			}
 			else if (packet_checked[payload_offset + 23] == 0x02) {
 				fprintf(fp, "subfunction: 0x%.2x (Message Service)\n", packet_checked[payload_offset + 23]);
 			}
-			if (packet_checked[payload_offset + 24] == 0x00) {
+			if (packet_checked[payload_offset + 24] == 0x00 && packet_checked[payload_offset + 22] != 0x83) {
 				fprintf(fp, "Sequence number: 0x%.2x\n\n", packet_checked[payload_offset + 24]);
 				fprintf(fp, "<<Data>>\n\n");
 				if (packet_checked[payload_offset + 25] == 0xff) {
@@ -3015,6 +3207,7 @@ static void ndpi_process_packet(u_char* args,
 				else {
 					fprintf(fp, "Error code: 0x%.2x%.2x (error)\n", packet_checked[payload_offset + 27], packet_checked[payload_offset + 28]);
 				}
+				fprintf(fp, "\n\n<<Data>>\n");
 				if (packet_checked[payload_offset + 29] == 0xff) {
 					fprintf(fp, "Return Code: 0x%.2x (Success)\n", packet_checked[payload_offset + 29]);
 				}
@@ -3033,30 +3226,10 @@ static void ndpi_process_packet(u_char* args,
 				fprintf(fp, "Data Length: 0x%.2x%.2x\n\n", packet_checked[payload_offset + 31], packet_checked[payload_offset + 32]);
 			}
 
-			if (packet_checked[payload_offset + tpkt_offset + cotp_offset + s7_header_offset + 4] == 0x12) {
-				//printf("--- Detection s7 Response (packet num : %d) ---\n",pkcount);
-				if (((packet_checked[payload_offset + tpkt_offset + cotp_offset + s7_header_offset + 5] & 0x0f) == 0x04) &&
-					(packet_checked[payload_offset + tpkt_offset + cotp_offset + s7_header_offset + 6] == 0x01)) {
-					fprintf(fp, "<Bit_analysis>\n");
-
-					s7id = (packet_checked[s7data_offset + 4] << 8);
-					s7id += packet_checked[s7data_offset + 5];
-					s7index = (packet_checked[s7data_offset + 6] << 8);
-					s7index += packet_checked[s7data_offset + 7];
-
-					s7data_len = header->caplen - (s7data_offset);
-
-					fprintf(fp, "ID = 0x%.4x, Index = 0x%.4x\n\n", s7id, s7index);
-					bit_analysis(packet_checked + s7data_offset, s7data_len, s7id, s7index, fp);
-				}
-				else {
-					//other Response function
-				}
-			}
-		}//
+		}
 		int s7_all = s7_counter.counter_reqSZL_req + s7_counter.counter_readClock_req + s7_counter.counter_msgService_req
-			+ s7_counter.counter_reqSZL_res + s7_counter.counter_readClock_res + s7_counter.counter_msgService_res + s7_counter.counter_setupComm + 1;
-		printf("Found a S7 Packet / Count: %d\n", s7_all);
+			+ s7_counter.counter_reqSZL_res + s7_counter.counter_readClock_res + s7_counter.counter_msgService_res + 1;
+		printf("Found a S7 Packet / Count: %d\n", counter);
 		fclose(fp);
 		u_int8_t func_group = packet_checked[param_offset + 5] & 0b00001111;
 		u_int8_t subfunction = packet_checked[param_offset + 6];
@@ -3080,7 +3253,7 @@ static void ndpi_process_packet(u_char* args,
 			}
 			else if (func_group == 0b0111) {
 				// time functions
-				if (subfunction == 0x01) {
+				if (subfunction == 0x02) {
 					s7_counter.counter_readClock_req++;
 					printf("Found: Request / Read Clock\n\n");
 				}
@@ -3104,15 +3277,11 @@ static void ndpi_process_packet(u_char* args,
 				}
 			}
 			else if (func_group == 0b0111) {
-				if (subfunction == 0x01) {
+				if (subfunction == 0x02) {
 					s7_counter.counter_readClock_res++;
 					printf("Found: Response / Read Clock\n\n");
 				}
 			}
-		}
-		else if ((packet_checked[ROSCTR_offset] == 0x01) || (packet_checked[ROSCTR_offset] == 0x03)) {
-			s7_counter.counter_setupComm++;
-			printf("Found: Setup communication\n\n");
 		}
 		// s7_counter.counter_reqSZL++;
 
@@ -3583,7 +3752,6 @@ int main(int argc, char** argv) {
 	s7_counter.counter_reqSZL_res = 0;
 	s7_counter.counter_readClock_res = 0;
 	s7_counter.counter_msgService_res = 0;
-	s7_counter.counter_setupComm = 0;
 
 	if (ndpi_get_api_version() != NDPI_API_VERSION) {
 		printf("nDPI Library version mismatch: please make sure this code and the nDPI library are in sync\n");
